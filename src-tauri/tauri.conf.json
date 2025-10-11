@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "pdf-mergery",
+  "productName": "PDF_병합기",
   "version": "0.1.0",
-  "identifier": "com.jungyoon-cha.pdf-mergery",
+  "identifier": "com.jungyoon-cha.pdf-mergery-app",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "pdf-mergery",
+        "title": "PDF 병합기",
         "width": 800,
         "height": 600
       }
@@ -25,12 +25,19 @@
   "bundle": {
     "active": true,
     "targets": ["msi"],
+    "shortDescription": "PDF 파일 병합 도구",
+    "longDescription": "여러 PDF 파일을 하나로 병합하는 도구입니다.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "wix": {
+        "language": "ko-KR"
+      }
+    }
   }
 }
