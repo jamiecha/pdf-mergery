@@ -5,6 +5,24 @@ use lopdf::{Document, Object, ObjectId};
 use tauri::command;
 
 #[command]
+fn count_pdfs(dir_path: String) -> Result<usize, String> {
+    let dir = PathBuf::from(&dir_path);
+    if !dir.is_dir() {
+        return Err(format!("Directory '{}' does not exist.", dir_path));
+    }
+
+    let pdf_count = fs::read_dir(&dir)
+        .map_err(|e| format!("Failed to read directory: {}", e))?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry.path().extension().and_then(|ext| ext.to_str()) == Some("pdf")
+        })
+        .count();
+
+    Ok(pdf_count)
+}
+
+#[command]
 fn merge_pdfs(dir_path: String) -> Result<String, String> {
     let dir = PathBuf::from(&dir_path);
     if !dir.is_dir() {
@@ -129,7 +147,7 @@ fn merge_pdfs(dir_path: String) -> Result<String, String> {
     merged_doc.save(&output_path)
         .map_err(|e| format!("Failed to save merged PDF: {}", e))?;
 
-    Ok(format!("PDFs merged into '{}'", output_path.display()))
+    Ok(output_path.to_string_lossy().to_string())
 }
 
 fn update_references(object: &mut Object, id_map: &BTreeMap<ObjectId, ObjectId>) {
@@ -163,7 +181,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![merge_pdfs])
+        .plugin(tauri_plugin_shell::init())
+        .invoke_handler(tauri::generate_handler![merge_pdfs, count_pdfs])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

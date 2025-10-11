@@ -15,12 +15,19 @@
       <div class="row">
         <button id="select-dir-btn">PDF 파일들이 들어있는 폴더 선택</button>
       </div>
-      <p id="selected-dir">아직 디렉토리를 선택하지 않았습니다</p>
+      <p id="selected-dir" style="white-space: pre-line;">아직 디렉토리를 선택하지 않았습니다</p>
 
       <div class="row">
         <button id="merge-btn" disabled>PDF 파일 병합</button>
       </div>
+      <p style="color: #666; font-size: 0.9em; margin-top: 0;">
+        💡 병합된 파일은 선택한 폴더의 상위 디렉토리에 폴더명.pdf로 생성됩니다
+      </p>
       <p id="merge-msg"></p>
+      
+      <div class="row">
+        <button id="open-folder-btn" disabled>📁 생성된 폴더 열기</button>
+      </div>
     </main>
   </body>
 </html>
