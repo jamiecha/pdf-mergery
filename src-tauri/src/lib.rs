@@ -64,33 +64,28 @@ fn merge_pdfs(dir_path: String) -> Result<String, String> {
     // Create a new document
     let mut merged_doc = Document::with_version("1.5");
     let mut max_id = 1u32;
+    let mut id_maps: Vec<BTreeMap<ObjectId, ObjectId>> = Vec::with_capacity(documents.len());
     
-    // Maps old object IDs to new object IDs for each document
-    let mut id_maps: Vec<BTreeMap<ObjectId, ObjectId>> = vec![BTreeMap::new(); documents.len()];
-    
-    // First pass: Copy all objects and create ID mappings
-    for (doc_idx, doc) in documents.iter().enumerate() {
-        for (old_id, object) in doc.objects.iter() {
+    // Two-pass per document: build full mapping, then copy with updates
+    for doc in &documents {
+        let mut id_map = BTreeMap::new();
+
+        // 1) Allocate all new ids up front
+        for &old_id in doc.objects.keys() {
             let new_id = (max_id, 0);
             max_id += 1;
-            id_maps[doc_idx].insert(*old_id, new_id);
-            merged_doc.objects.insert(new_id, object.clone());
+            id_map.insert(old_id, new_id);
         }
-    }
-    
-    // Second pass: Update all object references
-    for (doc_idx, doc) in documents.iter().enumerate() {
-        let id_map = &id_maps[doc_idx];
-        
-        for (old_id, _) in doc.objects.iter() {
-            if let Some(&new_id) = id_map.get(old_id) {
-                if let Some(object) = merged_doc.objects.get(&new_id).cloned() {
-                    let mut object = object;
-                    update_references(&mut object, id_map);
-                    merged_doc.objects.insert(new_id, object);
-                }
-            }
+
+        // 2) Copy objects with reference fixups using the full map
+        for (&old_id, object) in &doc.objects {
+            let mut obj = object.clone();
+            update_references(&mut obj, &id_map);
+            let new_id = id_map[&old_id];
+            merged_doc.objects.insert(new_id, obj);
         }
+
+        id_maps.push(id_map);
     }
     
     // Collect all page references
@@ -185,4 +180,157 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![merge_pdfs, count_pdfs])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+    use lopdf::{Document, Object};
+
+    fn create_minimal_pdf() -> Document {
+        let mut doc = Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+        let page_id = doc.new_object_id();
+        let font_id = doc.new_object_id();
+        let resources_id = doc.new_object_id();
+        let content_id = doc.new_object_id();
+
+        let mut page = lopdf::Dictionary::new();
+        page.set("Type", Object::Name(b"Page".to_vec()));
+        page.set("Parent", Object::Reference(pages_id));
+        page.set("Contents", Object::Reference(content_id));
+        page.set("Resources", Object::Reference(resources_id));
+        page.set("MediaBox", Object::Array(vec![
+            Object::Integer(0), Object::Integer(0),
+            Object::Integer(612), Object::Integer(792)
+        ]));
+
+        let mut resources = lopdf::Dictionary::new();
+        let mut fonts = lopdf::Dictionary::new();
+        fonts.set("F1", Object::Reference(font_id));
+        resources.set("Font", Object::Dictionary(fonts));
+
+        let mut font = lopdf::Dictionary::new();
+        font.set("Type", Object::Name(b"Font".to_vec()));
+        font.set("Subtype", Object::Name(b"Type1".to_vec()));
+        font.set("BaseFont", Object::Name(b"Helvetica".to_vec()));
+
+        let content = lopdf::Stream::new(
+            lopdf::Dictionary::new(),
+            b"BT /F1 12 Tf 100 700 Td (Test) Tj ET".to_vec()
+        );
+
+        let mut pages = lopdf::Dictionary::new();
+        pages.set("Type", Object::Name(b"Pages".to_vec()));
+        pages.set("Kids", Object::Array(vec![Object::Reference(page_id)]));
+        pages.set("Count", Object::Integer(1));
+
+        doc.objects.insert(page_id, Object::Dictionary(page));
+        doc.objects.insert(pages_id, Object::Dictionary(pages));
+        doc.objects.insert(font_id, Object::Dictionary(font));
+        doc.objects.insert(resources_id, Object::Dictionary(resources));
+        doc.objects.insert(content_id, Object::Stream(content));
+
+        let catalog_id = doc.add_object(lopdf::Dictionary::from_iter(vec![
+            ("Type", Object::Name(b"Catalog".to_vec())),
+            ("Pages", Object::Reference(pages_id)),
+        ]));
+
+        doc.trailer.set("Root", Object::Reference(catalog_id));
+        doc
+    }
+
+    #[test]
+    fn test_merge_pdfs_success() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path();
+
+        let mut pdf1 = create_minimal_pdf();
+        let mut pdf2 = create_minimal_pdf();
+
+        pdf1.save(dir_path.join("test1.pdf")).unwrap();
+        pdf2.save(dir_path.join("test2.pdf")).unwrap();
+
+        let result = merge_pdfs(dir_path.to_string_lossy().to_string());
+        assert!(result.is_ok());
+
+        let output_path = result.unwrap();
+        assert!(std::path::Path::new(&output_path).exists());
+        
+        let merged = Document::load(&output_path).unwrap();
+        let pages = merged.get_pages();
+        assert_eq!(pages.len(), 2);
+
+        // Verify each page has valid Contents and Resources references
+        for (_, page_id) in pages.iter() {
+            let page = merged.get_object(*page_id).unwrap();
+            if let Object::Dictionary(page_dict) = page {
+                // Check Contents reference exists
+                if let Ok(contents_ref) = page_dict.get(b"Contents") {
+                    match contents_ref {
+                        Object::Reference(ref_id) => {
+                            assert!(merged.get_object(*ref_id).is_ok(), 
+                                "Contents reference should point to valid object");
+                        }
+                        Object::Array(arr) => {
+                            for item in arr {
+                                if let Object::Reference(ref_id) = item {
+                                    assert!(merged.get_object(*ref_id).is_ok(), 
+                                        "Contents array reference should point to valid object");
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                
+                // Check Resources reference exists
+                if let Ok(resources_ref) = page_dict.get(b"Resources") {
+                    if let Object::Reference(ref_id) = resources_ref {
+                        assert!(merged.get_object(*ref_id).is_ok(), 
+                            "Resources reference should point to valid object");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_merge_pdfs_directory_not_found() {
+        let result = merge_pdfs("/nonexistent/directory".to_string());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("does not exist"));
+    }
+
+    #[test]
+    fn test_merge_pdfs_empty_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path();
+
+        let result = merge_pdfs(dir_path.to_string_lossy().to_string());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No PDF files found"));
+    }
+
+    #[test]
+    fn test_count_pdfs_success() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path();
+
+        let mut pdf = create_minimal_pdf();
+        pdf.save(dir_path.join("test1.pdf")).unwrap();
+        pdf.save(dir_path.join("test2.pdf")).unwrap();
+        fs::write(dir_path.join("not_a_pdf.txt"), "test").unwrap();
+
+        let result = count_pdfs(dir_path.to_string_lossy().to_string());
+        assert_eq!(result.unwrap(), 2);
+    }
+
+    #[test]
+    fn test_count_pdfs_directory_not_found() {
+        let result = count_pdfs("/nonexistent/directory".to_string());
+        assert!(result.is_err());
+    }
 }
