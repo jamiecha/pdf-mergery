@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
-import { Command } from "@tauri-apps/plugin-shell";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 let selectDirBtn: HTMLButtonElement | null;
 let mergeBtn: HTMLButtonElement | null;
@@ -11,7 +11,7 @@ let selectedDir: string | null = null;
 let mergedFilePath: string | null = null;
 
 async function selectDirectory() {
-  const dir = await open({
+  const dir = await openDialog({
     directory: true,
     multiple: false,
   });
@@ -63,12 +63,8 @@ async function openFolder() {
   if (!mergedFilePath) return;
   
   try {
-    // Get the directory containing the merged file
-    const dirPath = mergedFilePath.substring(0, mergedFilePath.lastIndexOf("\\"));
-    
-    // Open the folder in Windows Explorer
-    const command = Command.create("explorer", [dirPath]);
-    await command.execute();
+    // Open the folder and reveal the merged file (cross-platform)
+    await revealItemInDir(mergedFilePath);
   } catch (error) {
     if (mergeMsgEl) {
       mergeMsgEl.textContent = `❌ 폴더 열기 오류: ${error}`;
